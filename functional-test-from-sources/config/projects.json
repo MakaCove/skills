@@ -1,0 +1,10 @@
+{
+  "default_project": "OMS",
+  "projects": {
+    "OMS": {
+      "frontend": "D:\\IdeaProjects\\OMS\\netopstec_erp_client_vue",
+      "backend": "D:\\IdeaProjects\\OMS\\netopstec-oms-server2.0",
+      "output": "D:\\IdeaProjects\\OMS\\test-output"
+    }
+  }
+}
