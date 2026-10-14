@@ -1,0 +1,31 @@
+{
+  "defaultProfile": "auto-headed",
+  "profiles": {
+    "auto-headed": {
+      "engine": "auto",
+      "headed": true,
+      "slowMo": 500,
+      "launchOptions": {
+        "args": ["--start-maximized"]
+      },
+      "contextOptions": {
+        "viewport": null
+      }
+    },
+    "auto-headless": {
+      "engine": "auto",
+      "headed": false,
+      "slowMo": 0
+    }
+  },
+  "browserResolve": {
+    "preferEngine": ["fixed-chromium", "system-chrome"],
+    "playwrightBrowsersPath": "C:\\Users\\shian\\AppData\\Local\\ms-playwright",
+    "playwrightModulePaths": [
+      "C:\\Users\\shian\\node_modules\\playwright"
+    ],
+    "chromeExecutablePaths": [
+      "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+    ]
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "name": "ai-test-pipeline",
+  "version": "2.0.0",
+  "description": "面向 AI Agent 的测试流水线技能包：项目分析 -> API/UI 用例生成 -> 校验 -> 执行 -> Markdown 报告。",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "optionalDependencies": {
+    "playwright": "^1.49.0"
+  }
+}
