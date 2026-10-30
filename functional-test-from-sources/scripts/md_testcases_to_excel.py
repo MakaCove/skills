@@ -1,22 +1,59 @@
 #!/usr/bin/env python3
-"""Export testcase Markdown tables to a formatted Excel workbook."""
+"""Export an explicitly authored six-table Markdown bundle; never infer coverage."""
 
 from __future__ import annotations
 
 import argparse
+import html
+import re
 import sys
+import tempfile
 from pathlib import Path
 
-from testcase_io import CHAIN_HEADERS, FUNCTIONAL_HEADERS, ensure_input_paths, load_markdown_files, normalize_cell_text
+from testcase_io import (
+    REQUIRED_SHEETS, SHEET_HEADERS, ensure_input_paths, normalize,
+    split_markdown_row,
+)
+from validate_testcases import validate, validate_workbook
 
 
-def _headers(rows: list[dict[str, str]], core: list[str]) -> list[str]:
-    extras: list[str] = []
-    for row in rows:
-        for key in row:
-            if key not in core and key not in extras:
-                extras.append(key)
-    return core + extras
+def parse_workbook_markdown(text: str) -> dict[str, list[dict[str, str]]]:
+    """Require named sections and exact current headers; reject lossy legacy conversion."""
+    tables: dict[str, list[dict[str, str]]] = {}
+    current = None
+    lines = text.splitlines()
+    index = 0
+    separator = re.compile(r"^\s*\|(?:\s*:?-{3,}:?\s*\|)+\s*$")
+    while index < len(lines):
+        heading = re.match(r"^#{1,6}\s+(.+?)\s*#*\s*$", lines[index])
+        if heading:
+            title = heading.group(1).strip().strip("`")
+            current = title if title in SHEET_HEADERS else None
+        if (current and index + 1 < len(lines)
+                and lines[index].strip().startswith("|")
+                and separator.fullmatch(lines[index + 1])):
+            if current in tables:
+                raise ValueError(f"{current} 章节有多张表，请先人工整理")
+            headers = split_markdown_row(lines[index])
+            if headers != SHEET_HEADERS[current]:
+                raise ValueError(f"{current} 表头与当前契约不一致；旧格式请先补齐并转为标准六表")
+            rows = []
+            index += 2
+            while index < len(lines) and lines[index].strip().startswith("|"):
+                cells = split_markdown_row(lines[index])
+                if len(cells) != len(headers):
+                    raise ValueError(f"{current} 第 {index + 1} 行列数错误，文字中的竖线请转义")
+                cells = [html.unescape(re.sub(r"<br\s*/?>", "\n", cell, flags=re.I)) for cell in cells]
+                row = dict(zip(headers, cells))
+                if any(normalize(value) for value in row.values()):
+                    rows.append(row)
+                index += 1
+            tables[current] = rows
+            continue
+        index += 1
+    if not tables:
+        raise ValueError("未找到标准六表章节；仅有旧功能点/链路表不能自动推导需求、场景或覆盖状态")
+    return tables
 
 
 def write_sheet(worksheet, headers: list[str], rows: list[dict[str, str]]) -> None:
@@ -30,149 +67,80 @@ def write_sheet(worksheet, headers: list[str], rows: list[dict[str, str]]) -> No
         cell.font = Font(bold=True, color="FFFFFF")
         cell.fill = PatternFill("solid", fgColor="1F4E78")
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-
     for row_number, row in enumerate(rows, start=2):
         for column, header in enumerate(headers, start=1):
-            cell = worksheet.cell(row=row_number, column=column, value=normalize_cell_text(row.get(header, ""), header))
+            cell = worksheet.cell(row=row_number, column=column)
+            cell.value = normalize(row.get(header, ""))
+            # Test input such as '=1+1' is literal data, not an Excel formula.
+            cell.data_type = "s"
             cell.alignment = Alignment(vertical="top", wrap_text=True)
-
     widths = {
-        "步骤": 48, "操作步骤": 48, "预期结果": 48, "页面预期结果": 48,
-        "接口或数据预期结果": 42, "前置条件": 42, "测试数据": 30,
-        "备注/覆盖点": 36, "备注": 36, "说明": 42,
+        "内容": 90, "操作步骤": 48, "页面预期结果": 48,
+        "接口或数据预期结果": 48, "前置条件": 48, "测试数据": 30,
+        "备注": 42, "说明": 48, "覆盖说明": 48, "缺少的信息": 48,
+        "影响范围": 30, "建议确认内容": 48, "关联需求": 24, "对应用例": 36,
     }
     for column, header in enumerate(headers, start=1):
         worksheet.column_dimensions[get_column_letter(column)].width = widths.get(header, 18)
     worksheet.row_dimensions[1].height = 28
 
 
-def write_key_value_sheet(worksheet, rows: list[tuple[str, str]]) -> None:
-    from openpyxl.styles import Alignment, Font, PatternFill
-
-    worksheet.append(["项目", "内容"])
-    for key, value in rows:
-        worksheet.append([key, value])
-    for cell in worksheet[1]:
-        cell.font = Font(bold=True, color="FFFFFF")
-        cell.fill = PatternFill("solid", fgColor="1F4E78")
-        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-    for row in worksheet.iter_rows(min_row=2):
-        for cell in row:
-            cell.alignment = Alignment(vertical="top", wrap_text=True)
-    worksheet.column_dimensions["A"].width = 24
-    worksheet.column_dimensions["B"].width = 90
+def write_fixed_workbook(workbook, tables: dict[str, list[dict[str, str]]]) -> None:
+    missing = set(REQUIRED_SHEETS) - tables.keys()
+    if missing:
+        raise ValueError(f"缺少独立整理的工作表: {', '.join(sorted(missing))}；不能从已有用例反推")
+    for sheet in REQUIRED_SHEETS:
+        write_sheet(workbook.create_sheet(sheet), SHEET_HEADERS[sheet], tables[sheet])
 
 
-def write_fixed_workbook(workbook, functional: list[dict[str, str]]) -> None:
-    """Write the single-file workbook contract used by the skill."""
-    write_key_value_sheet(workbook.create_sheet("测试说明"), [
-        ("输出文件", "功能测试用例.xlsx"),
-        ("测试用例数量", str(len(functional))),
-        ("数据库 MCP", "由本次执行任务判定；未提供时在信息缺口中说明"),
-        ("执行结果初始值", "未执行"),
-    ])
+def export_markdown(paths: list[Path], output: Path) -> None:
+    import openpyxl
 
-    method_headers = ["设计方法", "适用性", "对应用例", "说明"]
-    method_names = [
-        ("等价类", "等价类"),
-        ("边界值", "边界值"),
-        ("判定表", "判定表"),
-        ("因果图", "因果图"),
-        ("状态迁移", "状态迁移"),
-        ("场景法", "场景法"),
-        ("正交或成对组合", "正交"),
-        ("错误推测", "错误推测"),
-    ]
-    method_rows = []
-    for display_name, keyword in method_names:
-        ids = [row.get("ID", "") for row in functional if keyword in row.get("设计方法", "")]
-        method_rows.append({
-            "设计方法": display_name,
-            "适用性": "适用" if ids else "适用但未覆盖",
-            "对应用例": ", ".join(item for item in ids if item),
-            "说明": "" if ids else "未在输入用例中找到对应覆盖，请判断不适用或补充用例",
-        })
-    write_sheet(workbook.create_sheet("测试方法覆盖"), method_headers, method_rows)
-
-    scenario_headers = ["场景编号", "场景名称", "优先级", "关联需求", "覆盖说明"]
-    scenarios = []
-    for row in functional:
-        scenarios.append({
-            "场景编号": row.get("ID", ""),
-            "场景名称": row.get("标题", ""),
-            "优先级": row.get("优先级", ""),
-            "关联需求": row.get("需求来源", ""),
-            "覆盖说明": row.get("备注/覆盖点", ""),
-        })
-    write_sheet(workbook.create_sheet("测试场景"), scenario_headers, scenarios)
-
-    detail_headers = [
-        "用例编号", "模块", "用例标题", "设计方法", "优先级", "类型", "关联需求", "前置条件",
-        "测试数据", "操作步骤", "页面预期结果", "接口或数据预期结果", "数据库验证",
-        "执行结果", "备注",
-    ]
-    details = []
-    for row in functional:
-        details.append({
-            "用例编号": row.get("ID", ""),
-            "模块": row.get("模块", ""),
-            "用例标题": row.get("标题", ""),
-            "设计方法": row.get("设计方法", ""),
-            "优先级": row.get("优先级", ""),
-            "类型": row.get("类型", ""),
-            "关联需求": row.get("需求来源", ""),
-            "前置条件": row.get("前置条件", ""),
-            "测试数据": row.get("测试数据", ""),
-            "操作步骤": row.get("步骤", ""),
-            "页面预期结果": row.get("预期结果", ""),
-            "接口或数据预期结果": row.get("接口或数据预期结果", ""),
-            "数据库验证": row.get("数据库验证", ""),
-            "执行结果": row.get("执行结果", "未执行") or "未执行",
-            "备注": row.get("备注/覆盖点", ""),
-        })
-    write_sheet(workbook.create_sheet("详细测试用例"), detail_headers, details)
-
-    coverage_headers = ["需求编号", "需求摘要", "对应用例", "覆盖状态", "说明"]
-    coverage = []
-    for row in functional:
-        coverage.append({
-            "需求编号": row.get("需求来源", "待补充"),
-            "需求摘要": row.get("标题", ""),
-            "对应用例": row.get("ID", ""),
-            "覆盖状态": "已设计",
-            "说明": row.get("备注/覆盖点", ""),
-        })
-    write_sheet(workbook.create_sheet("需求覆盖"), coverage_headers, coverage)
-    write_sheet(workbook.create_sheet("信息缺口"), ["编号", "缺少的信息", "影响范围", "是否影响执行", "建议确认内容"], [])
+    tables: dict[str, list[dict[str, str]]] = {}
+    for path in paths:
+        for sheet, rows in parse_workbook_markdown(path.read_text(encoding="utf-8-sig")).items():
+            tables.setdefault(sheet, []).extend(rows)
+    workbook = openpyxl.Workbook()
+    workbook.remove(workbook.active)
+    try:
+        write_fixed_workbook(workbook, tables)
+        errors = validate_workbook(workbook, at_generation=True)
+        if errors:
+            raise ValueError("导出前校验失败：\n" + "\n".join(errors))
+        if output.suffix.lower() != ".xlsx":
+            raise ValueError("输出必须为 .xlsx")
+        output.parent.mkdir(parents=True, exist_ok=True)
+        # Save to an owned temporary file so a failure cannot overwrite an existing deliverable.
+        with tempfile.NamedTemporaryFile(suffix=".xlsx", dir=output.parent, delete=False) as handle:
+            temporary = Path(handle.name)
+        try:
+            workbook.save(temporary)
+            errors = validate(temporary, at_generation=True)
+            if errors:
+                raise ValueError("导出后校验失败：\n" + "\n".join(errors))
+            temporary.replace(output)
+        finally:
+            temporary.unlink(missing_ok=True)
+    finally:
+        workbook.close()
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="导出测试用例 Markdown 表格为 Excel")
-    parser.add_argument("md_files", nargs="+", help="一个或多个测试用例 Markdown 文件")
+    parser = argparse.ArgumentParser(description="搬运已完整整理的标准六表 Markdown 为 Excel，不自动推导覆盖")
+    parser.add_argument("md_files", nargs="+", help="含命名章节与标准表头的内部 Markdown 文件")
     parser.add_argument("-o", "--output", default=None, help="输出 .xlsx 路径")
     args = parser.parse_args()
-
     try:
         paths = ensure_input_paths(args.md_files, {".md"})
-        functional, chain = load_markdown_files(paths)
-        if chain:
-            raise ValueError("当前输出契约不再支持业务链路表；请将链路用例并入详细测试用例，并使用类型字段区分")
-        import openpyxl
+        output = Path(args.output) if args.output else paths[0].with_suffix(".xlsx")
+        export_markdown(paths, output)
     except ImportError:
-        print("错误: 请安装 openpyxl（pip install -r requirements.txt）", file=sys.stderr)
+        print("错误: 缺少 openpyxl，导出与校验未完成", file=sys.stderr)
         return 2
-    except (OSError, UnicodeError, ValueError) as error:
-        print(f"错误: {error}", file=sys.stderr)
-        return 2
-
-    workbook = openpyxl.Workbook()
-    workbook.remove(workbook.active)
-    write_fixed_workbook(workbook, functional)
-
-    output = Path(args.output) if args.output else paths[0].with_suffix(".xlsx")
-    output.parent.mkdir(parents=True, exist_ok=True)
-    workbook.save(output)
-    print(f"已导出: {output}（测试用例 {len(functional)} 条）")
+    except (OSError, UnicodeError, ValueError) as exc:
+        print(f"错误: {exc}", file=sys.stderr)
+        return 1
+    print(f"已导出: {output}；结构与引用校验通过，业务覆盖仍需人工核对")
     return 0
 
 

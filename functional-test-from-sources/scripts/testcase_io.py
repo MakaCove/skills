@@ -8,6 +8,50 @@ from pathlib import Path
 from typing import Iterable
 
 
+# Current workbook contract. Legacy table helpers below are not the new schema.
+SHEET_HEADERS = {
+    "测试说明": ["项目", "内容"],
+    "测试方法覆盖": ["设计方法", "适用性", "对应用例", "说明"],
+    "测试场景": ["场景编号", "场景名称", "优先级", "关联需求", "覆盖说明"],
+    "详细测试用例": [
+        "用例编号", "模块", "用例标题", "设计方法", "优先级", "类型", "关联需求",
+        "前置条件", "测试数据", "操作步骤", "页面预期结果", "接口或数据预期结果",
+        "数据库验证", "执行结果", "备注",
+    ],
+    "需求覆盖": ["需求编号", "需求摘要", "对应用例", "覆盖状态", "说明"],
+    "信息缺口": ["编号", "缺少的信息", "影响范围", "是否影响执行", "建议确认内容"],
+}
+REQUIRED_SHEETS = list(SHEET_HEADERS)
+INFO_KEYS = ["测试范围", "输入来源", "数据库 MCP", "分析限制", "设计覆盖说明"]
+CANONICAL_METHODS = [
+    "等价类", "边界值", "判定表", "因果图", "状态迁移", "场景法", "正交或成对组合", "错误推测",
+]
+METHOD_STATUS = {"适用", "不适用", "适用但未覆盖"}
+CASE_TYPES = {"正常", "边界", "异常"}
+PRIORITIES = {"P0", "P1", "P2", "P3"}
+DB_VALUES = {"需要", "不需要"}
+EXECUTION_RESULTS = {"未执行", "通过", "失败"}
+COVERAGE_STATUS = {"已覆盖", "部分覆盖", "未覆盖", "待确认"}
+CASE_ID = re.compile(r"TC-[0-9]{3,}")
+REQUIREMENT_ID = re.compile(r"(?:R|AC)-[1-9][0-9]*")
+SCENARIO_ID = re.compile(r"SC-[0-9]{3,}")
+GAP_ID = re.compile(r"GAP-[0-9]{3,}")
+
+
+def split_methods(text: str) -> list[str]:
+    # Keep empty tokens so malformed combinations such as '+' cannot pass.
+    return [part.strip() for part in re.split(r"[+＋]", text)]
+
+
+def split_references(text: str) -> list[str]:
+    return [part for part in re.split(r"[\s,，、;；]+", text.strip()) if part]
+
+
+def find_case_references(text: str) -> set[str]:
+    # Explanation cells may contain prose, but ranges must still be expanded.
+    return set(re.findall(r"(?<![A-Za-z0-9_-])TC-[0-9]+(?![A-Za-z0-9_-])", text))
+
+
 FUNCTIONAL_HEADERS = [
     "模块", "ID", "标题", "优先级", "类型", "前置条件", "步骤", "测试数据", "预期结果", "备注/覆盖点"
 ]

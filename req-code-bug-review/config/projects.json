@@ -5,13 +5,8 @@
       "frontend": "D:\\IdeaProjects\\OMS\\netopstec_erp_client_vue",
       "backend": "D:\\IdeaProjects\\OMS\\netopstec-oms-server2.0",
       "output": "D:\\IdeaProjects\\OMS\\test-output"
-    }
-  }
-},
-{
-  "default_project": "WMS",
-  "projects": {
-    "OMS": {
+    },
+    "WMS": {
       "frontend": "D:\\IdeaProjects\\WMS\\netopstec-wms-client",
       "backend": "D:\\IdeaProjects\\WMS\\netopstec-wms-server2.0",
       "output": "D:\\IdeaProjects\\WMS\\test-output"
